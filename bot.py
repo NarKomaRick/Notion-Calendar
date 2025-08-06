@@ -19,13 +19,14 @@ from typing import Dict, List
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot("7902278531:AAHaRIi236Rvt_nfaaay-vWv17mmkv2YprE")
+bot = Bot(token=config.BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 db = Database()
 
-# Глобальная переменная для хранения ID последних сообщений бота
+
 user_last_messages: Dict[int, List[int]] = {}
+
 
 class CalendarStates(StatesGroup):
     SELECT_TIMEZONE = State()
@@ -93,6 +94,7 @@ async def send_main_menu(chat_id, user_id):
         text=text, 
         reply_markup=create_main_reply_keyboard(user_mode)
     )
+
 
 @dp.message(Command("start"))
 async def start_command(message: types.Message, state: FSMContext):
@@ -536,9 +538,11 @@ async def process_settings_message(message: types.Message, state: FSMContext):
         )
     
     elif text == "⏱ Напоминание":
+        # Получаем текущее значение напоминания
+        current_reminder = await db.get_user_reminder(user_id)
         await save_and_send(
             message.chat.id,
-            text="⏱ Выберите время напоминания:",
+            text=f"⏱ Текущее время напоминания: {current_reminder} мин\nВыберите новое значение:",
             reply_markup=create_compact_reminder_keyboard()
         )
     
@@ -560,6 +564,79 @@ async def process_settings_message(message: types.Message, state: FSMContext):
     elif text == "↩️ Главное меню":
         await state.set_state(CalendarStates.MAIN_MENU)
         await send_main_menu(message.chat.id, user_id)
+
+# Обновленный обработчик настроек
+@dp.callback_query(CalendarStates.SETTINGS_MODE)
+async def process_settings_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    data = callback_query.data
+    user_id = callback_query.from_user.id
+    
+    if data.startswith('theme_'):
+        theme = data.split('_')[1]
+        await db.set_user_theme(user_id, theme)
+        await bot.answer_callback_query(callback_query.id, f"✅ Тема установлена: {theme}")
+        
+        # Обновляем сообщение с настройками
+        user_mode = await db.get_user_mode(user_id)
+        current_reminder = await db.get_user_reminder(user_id)
+        timezone = await db.get_user_timezone(user_id)
+        theme = await db.get_user_theme(user_id)
+        
+        text = (
+            f"⚙️ Настройки:\n"
+            f"• Режим: {'встречи' if user_mode == 'meeting' else 'to-do'}\n"
+            f"• Напоминание за: {current_reminder} мин\n"
+            f"• Часовой пояс: {timezone}\n"
+            f"• Тема: {theme}\n\n"
+            "Выберите действие:"
+        )
+        
+        try:
+            await callback_query.message.edit_text(
+                text=text,
+                reply_markup=create_settings_reply_keyboard()
+            )
+        except:
+            # Если не удалось отредактировать, отправляем новое
+            await save_and_send(
+                callback_query.message.chat.id,
+                text=text,
+                reply_markup=create_settings_reply_keyboard()
+            )
+    
+    elif data.startswith('reminder_'):
+        # Обработка выбора напоминания
+        reminder = int(data.split('_')[1])
+        await db.set_user_reminder(user_id, reminder)
+        await bot.answer_callback_query(callback_query.id, f"⏱ Напоминание установлено: {reminder} мин")
+        
+        # Обновляем сообщение с настройками
+        user_mode = await db.get_user_mode(user_id)
+        current_reminder = reminder  # новое значение
+        timezone = await db.get_user_timezone(user_id)
+        theme = await db.get_user_theme(user_id)
+        
+        text = (
+            f"⚙️ Настройки:\n"
+            f"• Режим: {'встречи' if user_mode == 'meeting' else 'to-do'}\n"
+            f"• Напоминание за: {current_reminder} мин\n"
+            f"• Часовой пояс: {timezone}\n"
+            f"• Тема: {theme}\n\n"
+            "Выберите действие:"
+        )
+        
+        try:
+            await callback_query.message.edit_text(
+                text=text,
+                reply_markup=create_settings_reply_keyboard()
+            )
+        except:
+            # Если не удалось отредактировать, отправляем новое
+            await save_and_send(
+                callback_query.message.chat.id,
+                text=text,
+                reply_markup=create_settings_reply_keyboard()
+            )
 
 @dp.callback_query(CalendarStates.SETTINGS_MODE)
 async def process_theme_selection(callback_query: types.CallbackQuery, state: FSMContext):
@@ -588,7 +665,6 @@ async def process_group_usernames(message: types.Message, state: FSMContext):
     usernames = [username.strip() for username in text.split() if username.startswith('@')]
     
     if not usernames:
-        # Создаем клавиатуру с кнопкой "Назад"
         builder = ReplyKeyboardBuilder()
         builder.button(text="↩️ Назад")
         builder.adjust(1)
@@ -651,8 +727,8 @@ async def process_group_usernames(message: types.Message, state: FSMContext):
     )
     
     photo = FSInputFile(calendar_img)
-    await save_and_send_photo(
-        message.chat.id,
+    sent_message = await bot.send_photo(
+        chat_id=message.chat.id,
         photo=photo,
         caption=f"Общие свободные дни: {', '.join(map(str, free_days))}",
         reply_markup=create_group_mode_keyboard()
