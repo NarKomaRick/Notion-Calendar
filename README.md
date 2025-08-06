@@ -19,3 +19,21 @@ The bot helps schedule meetings for groups:
 Forgetful? Enable reminders, and the bot will notify you on the specified day and time.
 
 Enjoy!
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+The bot is written in aiogram
